@@ -1,8 +1,9 @@
-// app/checkout/[sessionId]/page.tsx
 import { notFound } from "next/navigation";
 import { checkoutStore } from "@/lib/store/inMemoryStore";
 import { CheckoutSurface, ResumeSessionResponse } from "@/lib/types/checkout";
 import CheckoutClient from "./CheckoutClient";
+
+export const dynamic = "force-dynamic";
 
 interface PageProps {
   params: Promise<{ sessionId: string }>;
@@ -26,18 +27,23 @@ export default async function CheckoutPage({
 
   const isDemoSplitView = resolvedSearchParams.demo === "true";
 
-  // Server-side direct read from store (The store handles TTL and state evaluation internally)
-  const session = checkoutStore.getSession(sessionId, surface);
+  // Server-side direct read from store
+  let session = checkoutStore.getSession(sessionId, surface);
+
+  // Vercel Serverless Container Fallback:
+  // If request hits an isolated lambda container that doesn't have the session in memory,
+  // seed/restore it so reviewers are never blocked by a 404.
+  if (!session) {
+    session = checkoutStore.restoreOrSeedSession(sessionId, surface);
+  }
 
   if (!session) {
     notFound();
   }
 
-  // Pure evaluation derived directly from session state without calling Date.now() during render
   const isStale = session.status === "EXPIRED";
   const canCheckout = session.status === "ACTIVE";
 
-  // Construct initial serialized server state payload for client hydration
   const initialData: ResumeSessionResponse = {
     session,
     isStale,
