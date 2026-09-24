@@ -5,6 +5,8 @@ import {
   AcceptPriceChangeResponse,
 } from "@/lib/types/checkout";
 
+export const dynamic = "force-dynamic";
+
 interface RouteContext {
   params: Promise<{ sessionId: string }>;
 }
@@ -19,6 +21,11 @@ export async function POST(request: NextRequest, context: RouteContext) {
         { error: "acceptedTotal and surface are required" },
         { status: 400 },
       );
+    }
+
+    // Ensure session exists in this container's memory before mutation
+    if (!checkoutStore.getSession(sessionId)) {
+      checkoutStore.restoreOrSeedSession(sessionId, body.surface);
     }
 
     const result = checkoutStore.acceptPriceChange(

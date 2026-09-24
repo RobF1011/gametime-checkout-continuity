@@ -1,4 +1,3 @@
-// app/checkout/[sessionId]/CheckoutClient.tsx
 "use client";
 
 import React, { useState, useEffect, useMemo } from "react";
@@ -177,12 +176,15 @@ function SingleCheckoutSurface({
     initialData,
   });
 
-  const [timeLeftMs, setTimeLeftMs] = useState<number>(
-    session?.ttlRemainingMs ?? 0,
-  );
-
   const [copiedLink, setCopiedLink] = useState(false);
 
+  // Deterministic initial timestamp matching the server payload
+  const [currentTimestamp, setCurrentTimestamp] = useState<number>(() => {
+    const s = initialData.session;
+    return s ? s.expiresAt - (s.ttlRemainingMs ?? 300000) : Date.now();
+  });
+
+  // Pure interval subscription: NO synchronous setState in effect body
   useEffect(() => {
     if (
       !session ||
@@ -192,16 +194,18 @@ function SingleCheckoutSurface({
       return;
     }
 
-    const updateTimer = () => {
-      const remaining = Math.max(0, session.expiresAt - Date.now());
-      setTimeLeftMs(remaining);
-    };
-
-    updateTimer();
-    const interval = setInterval(updateTimer, 1000);
+    const interval = setInterval(() => {
+      setCurrentTimestamp(Date.now());
+    }, 1000);
 
     return () => clearInterval(interval);
-  }, [session]);
+  }, [session?.status, session?.expiresAt]);
+
+  // Purely derived countdown timer value
+  const timeLeftMs = useMemo(() => {
+    if (!session) return 0;
+    return Math.max(0, session.expiresAt - currentTimestamp);
+  }, [session, currentTimestamp]);
 
   const formattedTimer = useMemo(() => {
     const totalSeconds = Math.floor(timeLeftMs / 1000);
@@ -216,7 +220,8 @@ function SingleCheckoutSurface({
 
   if (!session) return null;
 
-  const isExpired = session.status === "EXPIRED" || timeLeftMs <= 0;
+  // Server-authoritative status flags
+  const isExpired = session.status === "EXPIRED";
   const isPriceChanged = session.status === "PRICE_CHANGED";
   const isCompleted = session.status === "COMPLETED";
 
@@ -280,7 +285,10 @@ function SingleCheckoutSurface({
                 Holding Tickets
               </span>
             </div>
-            <div className="font-mono text-sm font-bold text-white tracking-wider">
+            <div
+              suppressHydrationWarning
+              className="font-mono text-sm font-bold text-white tracking-wider"
+            >
               {formattedTimer}
             </div>
           </div>

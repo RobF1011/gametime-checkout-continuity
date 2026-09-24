@@ -118,24 +118,40 @@ export function useCheckoutSession({
   });
 
   // 4. Mutation: Reviewer simulator controls
-  const mockActionMutation = useMutation<
-    MockTriggerResponse,
-    Error,
-    { action: MockTriggerAction; priceDelta?: number }
-  >({
-    mutationFn: async ({ action, priceDelta }) => {
+  const mockActionMutation = useMutation({
+    mutationFn: async ({
+      action,
+      priceDelta,
+    }: {
+      action: string;
+      priceDelta?: number;
+    }) => {
       const res = await fetch(`/api/checkout/${sessionId}/mock`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, priceDelta }),
       });
-
       if (!res.ok) {
         throw new Error("Failed to execute simulation trigger");
       }
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      if (data?.session) {
+        queryClient.setQueriesData(
+          { queryKey: ["checkout-session", sessionId] },
+          (old: unknown) => {
+            const prev =
+              (old as ResumeSessionResponse | undefined) || initialData;
+            return {
+              ...prev,
+              session: data.session,
+              isStale: data.session.status === "EXPIRED",
+              canCheckout: data.session.status === "ACTIVE",
+            };
+          },
+        );
+      }
       queryClient.invalidateQueries({
         queryKey: ["checkout-session", sessionId],
       });

@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { checkoutStore } from "@/lib/store/inMemoryStore";
 import { CheckoutSurface, ResumeSessionResponse } from "@/lib/types/checkout";
 
+export const dynamic = "force-dynamic";
+
 interface RouteContext {
   params: Promise<{ sessionId: string }>;
 }
@@ -10,11 +12,14 @@ export async function GET(request: NextRequest, context: RouteContext) {
   const { sessionId } = await context.params;
   const { searchParams } = new URL(request.url);
   const currentSurface = searchParams.get("surface") as CheckoutSurface | null;
+  const surface: CheckoutSurface = currentSurface ?? "desktop_web";
 
-  const session = checkoutStore.getSession(
-    sessionId,
-    currentSurface ?? undefined,
-  );
+  let session = checkoutStore.getSession(sessionId, surface);
+
+  // Vercel Serverless Fallback: restore/seed if polled on a fresh container instance
+  if (!session) {
+    session = checkoutStore.restoreOrSeedSession(sessionId, surface);
+  }
 
   if (!session) {
     return NextResponse.json(

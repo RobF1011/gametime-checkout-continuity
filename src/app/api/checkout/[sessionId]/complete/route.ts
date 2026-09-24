@@ -5,6 +5,8 @@ import {
   CompleteCheckoutResponse,
 } from "@/lib/types/checkout";
 
+export const dynamic = "force-dynamic";
+
 interface RouteContext {
   params: Promise<{ sessionId: string }>;
 }
@@ -16,9 +18,18 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
     if (!body.surface || !body.idempotencyKey) {
       return NextResponse.json(
-        { error: "surface and idempotencyKey are required" },
+        {
+          error: {
+            code: "VALIDATION_ERROR",
+            message: "surface and idempotencyKey are required",
+          },
+        },
         { status: 400 },
       );
+    }
+
+    if (!checkoutStore.getSession(sessionId)) {
+      checkoutStore.restoreOrSeedSession(sessionId, body.surface);
     }
 
     const result = checkoutStore.completeCheckout(
@@ -29,19 +40,22 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
     if (!result.success || !result.session) {
       const statusCode =
-        result.errorCode === "CONCURRENT_PROCESSING_CONFLICT" ? 409 : 422;
+        result.errorCode === "CONCURRENT_PROCESSING_CONFLICT"
+          ? 409
+          : result.errorCode === "ALREADY_COMPLETED"
+            ? 409
+            : 400;
 
-      const failureResponse: CompleteCheckoutResponse = {
-        success: false,
-        session: checkoutStore.getSession(sessionId)!,
-        error: {
-          code: result.errorCode || "INVENTORY_UNAVAILABLE",
-          message: result.errorMessage || "Unable to complete checkout",
-          conflictingSurface: result.conflictingSurface,
+      return NextResponse.json(
+        {
+          error: {
+            code: result.errorCode || "CHECKOUT_FAILED",
+            message: result.errorMessage || "Failed to complete checkout",
+            conflictingSurface: result.conflictingSurface,
+          },
         },
-      };
-
-      return NextResponse.json(failureResponse, { status: statusCode });
+        { status: statusCode },
+      );
     }
 
     const response: CompleteCheckoutResponse = {
@@ -53,7 +67,12 @@ export async function POST(request: NextRequest, context: RouteContext) {
     return NextResponse.json(response, { status: 200 });
   } catch {
     return NextResponse.json(
-      { error: "Internal Server Error" },
+      {
+        error: {
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Internal Server Error",
+        },
+      },
       { status: 500 },
     );
   }
