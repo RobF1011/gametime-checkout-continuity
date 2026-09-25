@@ -37,6 +37,7 @@ export function useCheckoutSession({
       return res.json();
     },
     initialData,
+    staleTime: 1000,
     refetchInterval: (query) => {
       const status = query.state.data?.session?.status;
       // Stop continuous polling once in a terminal state

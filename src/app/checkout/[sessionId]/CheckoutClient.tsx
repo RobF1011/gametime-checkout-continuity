@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { useCheckoutSession } from "@/lib/hooks/useCheckoutSession";
 import { CheckoutSurface, ResumeSessionResponse } from "@/lib/types/checkout";
+import { QRCodeSVG } from "qrcode.react";
 import {
   Clock,
   ShieldCheck,
@@ -13,6 +14,7 @@ import {
   Copy,
   RefreshCw,
   Zap,
+  QrCode,
 } from "lucide-react";
 
 interface CheckoutClientProps {
@@ -100,7 +102,7 @@ export default function CheckoutClient({
 
           {/* Surface 2: Mobile Simulation Frame (5 cols) */}
           <section className="lg:col-span-5 flex justify-center">
-            <div className="w-full max-w-[380px] bg-neutral-950 border-4 border-neutral-800 rounded-[2.5rem] p-4 shadow-2xl overflow-hidden relative">
+            <div className="w-full max-w-95 bg-neutral-950 border-4 border-neutral-800 rounded-[2.5rem] p-4 shadow-2xl overflow-hidden relative">
               <div className="absolute top-2 left-1/2 -translate-x-1/2 h-4 w-28 bg-neutral-800 rounded-full z-20" />
 
               <div className="mt-4 mb-2 flex items-center justify-between border-b border-neutral-800/80 pb-2 px-1">
@@ -177,6 +179,12 @@ function SingleCheckoutSurface({
   });
 
   const [copiedLink, setCopiedLink] = useState(false);
+  const [showQr, setShowQr] = useState(false);
+
+  const deepLinkUrl =
+    typeof window !== "undefined"
+      ? `${window.location.origin}/checkout/${sessionId}?surface=mobile_web`
+      : `/checkout/${sessionId}?surface=mobile_web`;
 
   // Deterministic initial timestamp matching the server payload
   const [currentTimestamp, setCurrentTimestamp] = useState<number>(() => {
@@ -226,8 +234,7 @@ function SingleCheckoutSurface({
   const isCompleted = session.status === "COMPLETED";
 
   const handleCopyLink = () => {
-    const url = `${window.location.origin}/checkout/${sessionId}?surface=mobile_web`;
-    navigator.clipboard.writeText(url);
+    navigator.clipboard.writeText(deepLinkUrl);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);
   };
@@ -454,20 +461,62 @@ function SingleCheckoutSurface({
         </>
       )}
 
-      {/* Continuity Share / Deep Link Link (Desktop Only) */}
+      {/* Continuity Share / Deep Link & QR Code (Desktop Only) */}
       {!isMobileLayout && (
-        <div className="rounded-xl border border-neutral-800/80 bg-neutral-900/40 p-3 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 text-xs text-neutral-400">
-            <Smartphone className="h-4 w-4 text-neutral-300" />
-            <span>Resume this session on mobile:</span>
+        <div className="rounded-xl border border-neutral-800/80 bg-neutral-900/40 p-4 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs text-neutral-300">
+              <Smartphone className="h-4 w-4 text-emerald-400" />
+              <span>Resume or test continuity on your phone:</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowQr((prev) => !prev)}
+                className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition border ${
+                  showQr
+                    ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
+                    : "bg-neutral-800 text-neutral-300 border-neutral-700 hover:bg-neutral-700"
+                }`}
+              >
+                <QrCode className="h-3.5 w-3.5" />
+                {showQr ? "Hide QR" : "Show QR"}
+              </button>
+              <button
+                onClick={handleCopyLink}
+                className="inline-flex items-center gap-1 rounded-lg bg-neutral-800 border border-neutral-700 px-2.5 py-1.5 text-xs font-semibold text-neutral-200 hover:bg-neutral-700 transition"
+              >
+                <Copy className="h-3 w-3" />
+                {copiedLink ? "Copied!" : "Copy Link"}
+              </button>
+            </div>
           </div>
-          <button
-            onClick={handleCopyLink}
-            className="inline-flex items-center gap-1 rounded bg-neutral-800 px-2.5 py-1 text-xs font-semibold text-neutral-200 hover:bg-neutral-700 transition"
-          >
-            <Copy className="h-3 w-3" />
-            {copiedLink ? "Copied Link!" : "Copy Link"}
-          </button>
+
+          {/* Expandable QR Code Scanner Card */}
+          {showQr && deepLinkUrl && (
+            <div className="flex flex-col sm:flex-row items-center gap-4 rounded-lg bg-neutral-950 p-4 border border-neutral-800 animate-in fade-in zoom-in-95 duration-150">
+              <div className="p-2.5 bg-white rounded-xl shadow-md shrink-0">
+                <QRCodeSVG
+                  value={deepLinkUrl}
+                  size={128}
+                  level="M"
+                  marginSize={0}
+                />
+              </div>
+              <div className="text-center sm:text-left space-y-1">
+                <div className="text-xs font-bold text-white flex items-center justify-center sm:justify-start gap-1.5">
+                  <span className="h-2 w-2 rounded-full bg-emerald-400 animate-ping" />
+                  Live Cross-Device Hand-off
+                </div>
+                <p className="text-[11px] text-neutral-400 leading-relaxed">
+                  Scan with your mobile camera to resume this exact reservation.
+                  Both screens will synchronize in real time.
+                </p>
+                <div className="pt-1 font-mono text-[10px] text-neutral-500 max-w-70">
+                  {deepLinkUrl}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
