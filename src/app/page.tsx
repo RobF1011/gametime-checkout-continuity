@@ -85,7 +85,7 @@ export default function HomePage() {
           <button
             disabled={isCreating}
             onClick={handleStartCheckout}
-            className="w-full py-3.5 px-4 rounded-xl font-bold text-sm bg-emerald-500 text-neutral-950 hover:bg-emerald-400 shadow-lg shadow-emerald-500/20 active:scale-[0.99] transition flex items-center justify-center gap-2 disabled:opacity-50"
+            className="w-full py-3.5 px-4 rounded-xl font-bold text-sm bg-emerald-500 text-neutral-950 hover:bg-emerald-400 shadow-lg shadow-emerald-500/20 active:scale-[0.99] transition flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
           >
             {isCreating ? (
               "Locking Inventory..."

@@ -60,7 +60,7 @@ export default function CheckoutClient({
             <h1 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
               <span className="text-emerald-500 font-black">GAMETIME</span>
               <span className="text-neutral-500 text-sm font-normal">
-                | Concurrency & Continuity Engine
+                | Checkout Continuity Demo
               </span>
             </h1>
             <p className="text-xs text-neutral-400">
@@ -81,15 +81,12 @@ export default function CheckoutClient({
           <section className="lg:col-span-7 bg-neutral-900/60 border border-neutral-800 rounded-2xl p-6 shadow-xl backdrop-blur-sm">
             <div className="flex items-center justify-between border-b border-neutral-800 pb-3 mb-6">
               <div className="flex items-center gap-2">
-                <span className="px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 text-xs font-semibold uppercase tracking-wider">
-                  Surface A
-                </span>
                 <h2 className="text-sm font-semibold text-neutral-200">
                   Desktop Web Experience
                 </h2>
               </div>
               <span className="text-xs text-neutral-400 font-mono">
-                surface=desktop_web
+                desktop_web
               </span>
             </div>
             <SingleCheckoutSurface
@@ -272,7 +269,7 @@ function SingleCheckoutSurface({
           </p>
           <button
             onClick={() => triggerMockAction({ action: "RESET_SESSION" })}
-            className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-neutral-800 px-3 py-1.5 text-xs font-semibold text-neutral-200 hover:bg-neutral-700 transition"
+            className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-neutral-800 px-3 py-1.5 text-xs font-semibold text-neutral-200 hover:bg-neutral-700 transition cursor-pointer"
           >
             <RefreshCw className="h-3 w-3" /> Re-lease Listing
           </button>
@@ -325,7 +322,7 @@ function SingleCheckoutSurface({
                     onClick={() =>
                       acceptPriceChange({ acceptedTotal: session.price.total })
                     }
-                    className="mt-3 w-full rounded-lg bg-amber-500 px-3 py-2 text-xs font-bold text-neutral-950 hover:bg-amber-400 transition"
+                    className="mt-3 w-full rounded-lg bg-amber-500 px-3 py-2 text-xs font-bold text-neutral-950 hover:bg-amber-400 transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1"
                   >
                     {isAcceptingPrice
                       ? "Updating Lock..."
@@ -436,7 +433,7 @@ function SingleCheckoutSurface({
               }
               className={`w-full py-3.5 px-4 rounded-xl font-bold text-sm tracking-wide transition flex items-center justify-center gap-2 ${
                 canCheckout && !isCompleting
-                  ? "bg-emerald-500 text-neutral-950 hover:bg-emerald-400 shadow-lg shadow-emerald-500/20 active:scale-[0.99]"
+                  ? "bg-emerald-500 text-neutral-950 hover:bg-emerald-400 shadow-lg shadow-emerald-500/20 active:scale-[0.99] cursor-pointer"
                   : "bg-neutral-800 text-neutral-400 cursor-not-allowed border border-neutral-700"
               }`}
             >
@@ -467,15 +464,15 @@ function SingleCheckoutSurface({
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 text-xs text-neutral-300">
               <Smartphone className="h-4 w-4 text-emerald-400" />
-              <span>Resume or test continuity on your phone:</span>
+              <span>Resume this session on mobile:</span>
             </div>
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setShowQr((prev) => !prev)}
                 className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition border ${
                   showQr
-                    ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
-                    : "bg-neutral-800 text-neutral-300 border-neutral-700 hover:bg-neutral-700"
+                    ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40 cursor-pointer"
+                    : "bg-neutral-800 text-neutral-300 border-neutral-700 hover:bg-neutral-700 cursor-pointer"
                 }`}
               >
                 <QrCode className="h-3.5 w-3.5" />
@@ -483,7 +480,7 @@ function SingleCheckoutSurface({
               </button>
               <button
                 onClick={handleCopyLink}
-                className="inline-flex items-center gap-1 rounded-lg bg-neutral-800 border border-neutral-700 px-2.5 py-1.5 text-xs font-semibold text-neutral-200 hover:bg-neutral-700 transition"
+                className="inline-flex items-center gap-1 rounded-lg bg-neutral-800 border border-neutral-700 px-2.5 py-1.5 text-xs font-semibold text-neutral-200 hover:bg-neutral-700 transition cursor-pointer"
               >
                 <Copy className="h-3 w-3" />
                 {copiedLink ? "Copied!" : "Copy Link"}
@@ -534,21 +531,21 @@ function SingleCheckoutSurface({
                 priceDelta: 15.0,
               })
             }
-            className="rounded bg-neutral-800/90 py-1.5 px-2 text-[11px] font-medium text-neutral-300 hover:bg-neutral-700 disabled:opacity-40 transition"
+            className="rounded bg-neutral-800/90 py-1.5 px-2 text-[11px] font-medium text-neutral-300 hover:bg-neutral-700 disabled:opacity-40 transition cursor-pointer"
           >
             + $15 Price Surge
           </button>
           <button
             disabled={isTriggeringMock || isCompleted || isExpired}
             onClick={() => triggerMockAction({ action: "FORCE_EXPIRE" })}
-            className="rounded bg-neutral-800/90 py-1.5 px-2 text-[11px] font-medium text-rose-300 hover:bg-neutral-700 disabled:opacity-40 transition"
+            className="rounded bg-neutral-800/90 py-1.5 px-2 text-[11px] font-medium text-rose-300 hover:bg-neutral-700 disabled:opacity-40 transition cursor-pointer"
           >
             Force Expire TTL
           </button>
           <button
             disabled={isTriggeringMock}
             onClick={() => triggerMockAction({ action: "RESET_SESSION" })}
-            className="rounded bg-neutral-800/90 py-1.5 px-2 text-[11px] font-medium text-neutral-300 hover:bg-neutral-700 disabled:opacity-40 transition"
+            className="rounded bg-neutral-800/90 py-1.5 px-2 text-[11px] font-medium text-neutral-300 hover:bg-neutral-700 disabled:opacity-40 transition cursor-pointer"
           >
             Reset Session
           </button>
