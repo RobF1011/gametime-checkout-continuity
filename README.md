@@ -4,6 +4,8 @@ A real-time, cross-surface checkout system built to eliminate friction and race 
 
 The engine preserves active ticket reservations, synchronizes inventory lease countdowns, recovers from dynamic marketplace price drift, and enforces strictly atomic, idempotent order completions across concurrent devices.
 
+**Live Deployment:** The production prototype is live and deployed on Render at https://gametime-checkout-continuity.onrender.com/.
+
 ---
 
 ## 1. What Was Built & How to Run It
