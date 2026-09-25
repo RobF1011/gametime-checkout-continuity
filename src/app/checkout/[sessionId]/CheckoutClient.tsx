@@ -15,6 +15,7 @@ import {
   RefreshCw,
   Zap,
   QrCode,
+  Loader2,
 } from "lucide-react";
 
 interface CheckoutClientProps {
@@ -177,6 +178,8 @@ function SingleCheckoutSurface({
 
   const [copiedLink, setCopiedLink] = useState(false);
   const [showQr, setShowQr] = useState(false);
+  const [hasInitiatedCompletion, setHasInitiatedCompletion] = useState(false);
+  const [hasInitiatedAcceptPrice, setHasInitiatedAcceptPrice] = useState(false);
 
   const deepLinkUrl =
     typeof window !== "undefined"
@@ -206,7 +209,7 @@ function SingleCheckoutSurface({
     return () => clearInterval(interval);
   }, [session?.status, session?.expiresAt]);
 
-  // Purely derived countdown timer value
+  // Derived countdown timer value
   const timeLeftMs = useMemo(() => {
     if (!session) return 0;
     return Math.max(0, session.expiresAt - currentTimestamp);
@@ -230,10 +233,34 @@ function SingleCheckoutSurface({
   const isPriceChanged = session.status === "PRICE_CHANGED";
   const isCompleted = session.status === "COMPLETED";
 
+  // Prevent flicker back to normal button state while transitioning
+  const isSubmitting = isCompleting || hasInitiatedCompletion || isCompleted;
+  const isProcessingPrice = isAcceptingPrice || hasInitiatedAcceptPrice;
+
   const handleCopyLink = () => {
     navigator.clipboard.writeText(deepLinkUrl);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);
+  };
+
+  const handleCompleteOrder = async () => {
+    try {
+      setHasInitiatedCompletion(true);
+      await completeCheckout({ idempotencyKey, paymentType: "CREDIT_CARD" });
+    } catch {
+      setHasInitiatedCompletion(false);
+    }
+  };
+
+  const handleAcceptPrice = async () => {
+    try {
+      setHasInitiatedAcceptPrice(true);
+      await acceptPriceChange({ acceptedTotal: session.price.total });
+    } catch {
+      setHasInitiatedAcceptPrice(false);
+    } finally {
+      setHasInitiatedAcceptPrice(false);
+    }
   };
 
   return (
@@ -318,15 +345,18 @@ function SingleCheckoutSurface({
                     (+${session.priceDrift.delta.toFixed(2)} total).
                   </p>
                   <button
-                    disabled={isAcceptingPrice}
-                    onClick={() =>
-                      acceptPriceChange({ acceptedTotal: session.price.total })
-                    }
-                    className="mt-3 w-full rounded-lg bg-amber-500 px-3 py-2 text-xs font-bold text-neutral-950 hover:bg-amber-400 transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1"
+                    disabled={isProcessingPrice}
+                    onClick={handleAcceptPrice}
+                    className="mt-3 w-full rounded-lg bg-amber-500 px-3 py-2 text-xs font-bold text-neutral-950 hover:bg-amber-400 transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
                   >
-                    {isAcceptingPrice
-                      ? "Updating Lock..."
-                      : "Accept New Total & Continue"}
+                    {isProcessingPrice ? (
+                      <>
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        <span>Updating Lock...</span>
+                      </>
+                    ) : (
+                      "Accept New Total & Continue"
+                    )}
                   </button>
                 </div>
               </div>
@@ -427,17 +457,15 @@ function SingleCheckoutSurface({
           {/* Primary Action Button */}
           <div className="pt-2">
             <button
-              disabled={!canCheckout || isCompleting}
-              onClick={() =>
-                completeCheckout({ idempotencyKey, paymentType: "CREDIT_CARD" })
-              }
+              disabled={!canCheckout || isSubmitting}
+              onClick={handleCompleteOrder}
               className={`w-full py-3.5 px-4 rounded-xl font-bold text-sm tracking-wide transition flex items-center justify-center gap-2 ${
-                canCheckout && !isCompleting
+                canCheckout && !isSubmitting
                   ? "bg-emerald-500 text-neutral-950 hover:bg-emerald-400 shadow-lg shadow-emerald-500/20 active:scale-[0.99] cursor-pointer"
                   : "bg-neutral-800 text-neutral-400 cursor-not-allowed border border-neutral-700"
               }`}
             >
-              {isCompleting ? (
+              {isSubmitting ? (
                 <>
                   <RefreshCw className="h-4 w-4 animate-spin" />
                   Securing Tickets...
@@ -508,7 +536,7 @@ function SingleCheckoutSurface({
                   Scan with your mobile camera to resume this exact reservation.
                   Both screens will synchronize in real time.
                 </p>
-                <div className="pt-1 font-mono text-[10px] text-neutral-500 max-w-70">
+                <div className="pt-1 font-mono text-[10px] text-neutral-500 max-w-70 truncate">
                   {deepLinkUrl}
                 </div>
               </div>

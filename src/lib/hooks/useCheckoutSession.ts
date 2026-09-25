@@ -7,8 +7,6 @@ import {
   CheckoutSurface,
   CompleteCheckoutRequest,
   CompleteCheckoutResponse,
-  MockTriggerAction,
-  MockTriggerResponse,
   ResumeSessionResponse,
 } from "@/lib/types/checkout";
 
@@ -77,8 +75,24 @@ export function useCheckoutSession({
       }
       return data;
     },
-    onSuccess: () => {
-      // Invalidate queries across all surfaces to sync state immediately
+    onSuccess: (data) => {
+      // Instantly update query cache so the order confirmation renders on the next frame
+      if (data?.session) {
+        queryClient.setQueriesData<ResumeSessionResponse>(
+          { queryKey: ["checkout-session", sessionId] },
+          (old) => {
+            const prev = old || initialData;
+            if (!prev) return undefined;
+            return {
+              ...prev,
+              session: data.session,
+              canCheckout: false,
+              isStale: false,
+            };
+          },
+        );
+      }
+      // Revalidate in background to ensure all surface caches remain synchronized
       queryClient.invalidateQueries({
         queryKey: ["checkout-session", sessionId],
       });
@@ -111,7 +125,23 @@ export function useCheckoutSession({
       }
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      // Instantly clear the price drift alert and return status to ACTIVE
+      if (data?.session) {
+        queryClient.setQueriesData<ResumeSessionResponse>(
+          { queryKey: ["checkout-session", sessionId] },
+          (old) => {
+            const prev = old || initialData;
+            if (!prev) return undefined;
+            return {
+              ...prev,
+              session: data.session,
+              canCheckout: data.session.status === "ACTIVE",
+              isStale: data.session.status === "EXPIRED",
+            };
+          },
+        );
+      }
       queryClient.invalidateQueries({
         queryKey: ["checkout-session", sessionId],
       });
@@ -139,11 +169,11 @@ export function useCheckoutSession({
     },
     onSuccess: (data) => {
       if (data?.session) {
-        queryClient.setQueriesData(
+        queryClient.setQueriesData<ResumeSessionResponse>(
           { queryKey: ["checkout-session", sessionId] },
-          (old: unknown) => {
-            const prev =
-              (old as ResumeSessionResponse | undefined) || initialData;
+          (old) => {
+            const prev = old || initialData;
+            if (!prev) return undefined;
             return {
               ...prev,
               session: data.session,
@@ -161,6 +191,7 @@ export function useCheckoutSession({
 
   return {
     session: sessionQuery.data?.session,
+    orderId: completeMutation.data?.orderId,
     isStale: sessionQuery.data?.isStale ?? false,
     canCheckout: sessionQuery.data?.canCheckout ?? false,
     deepLink: sessionQuery.data?.deepLink,
