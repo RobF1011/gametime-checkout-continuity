@@ -2,7 +2,7 @@
 
 A real-time, cross-surface checkout system built to eliminate friction and race conditions when fans transition between Desktop Web and Mobile Web/App surfaces.
 
-The engine preserves active ticket reservations, synchronizes inventory lease countdowns, recovers from dynamic marketplace price drift, and enforces strictly atomic, idempotent order completions across concurrent devices.
+The engine preserves active ticket reservations, synchronizes inventory lease countdowns, recovers from dynamic marketplace price drift, and prevents duplicate orders when multiple devices complete the same session.
 
 **Live Deployment:** The production prototype is live and deployed on Render at https://gametime-checkout-continuity.onrender.com/.
 
@@ -14,7 +14,7 @@ The engine preserves active ticket reservations, synchronizes inventory lease co
 
 - **Frontend:** Next.js (App Router), React, TypeScript, Tailwind CSS.
 - **State & Data Synchronization:** TanStack React Query with deterministic server-anchored timestamps, zero-waterfall client hydration, and automated polling.
-- **Continuous Integration & Testing:** Playwright E2E testing suite (4 scenarios covering 100% of continuity edge cases) targeting Node 24 on GitHub Actions.
+- **Continuous Integration & Testing:** Playwright E2E suite (5 scenarios covering the core continuity transitions: hand-off, price drift, duplicate completion, lease expiry, and stale-session restore) running on Node 24 in GitHub Actions.
 - **Mobile Cross-Device QR Engine:** Dynamic client-side SVG QR code generator (`qrcode.react`) for camera-based cross-device testing.
 
 ---
@@ -27,7 +27,7 @@ git clone https://github.com/RobF1011/gametime-checkout-continuity.git
 cd gametime-checkout-continuity
 npm install
 
-# 2. Run the Playwright E2E verification suite (All 4 scenarios)
+# 2. Run the Playwright E2E verification suite (all 5 scenarios)
 npm run test:e2e
 # or
 npx playwright test
@@ -36,11 +36,9 @@ npx playwright test
 npm run dev
 ```
 
-Visit `http://localhost:3000` to launch the demo index, or directly navigate to an active session:
+Visit `http://localhost:3000` and click **Hold Tickets & Start Checkout** to create a session. You land on `/checkout/{sessionId}?demo=true`.
 
-```text
-http://localhost:3000/checkout/8ac6a0c1-8d25-4c07-96a8-6f14a0808201
-```
+Session IDs are UUIDv7, so each ID carries its creation time. A hand-typed or outdated ID resolves to an `EXPIRED` session rather than a fresh hold (see [Stale Inventory](#stale-inventory-lease-expiry)).
 
 - **Live Demo / Split View:** Append `?demo=true` to view Desktop Surface A side-by-side with an interactive Mobile Safari viewport on a single screen.
 - **Mobile Cross-Device Hand-Off:** Click **"Show QR"** on any desktop surface and scan it with a smartphone camera to resume the exact session instantly.
@@ -49,33 +47,31 @@ http://localhost:3000/checkout/8ac6a0c1-8d25-4c07-96a8-6f14a0808201
 
 ## 2. Checkout Session State Model
 
-The engine operates on a deterministic Finite State Machine (FSM) backed by strict state transition rules:
+All transitions live in `src/lib/store/inMemoryStore.ts`. Every read and write passes through `evaluateSessionState`, which computes expiry from the server clock against `expiresAt`. Expiry is evaluated on access rather than scheduled by a timer.
 
-```
-                  ┌───────────────┐
-                  │    ACTIVE     │◄──────────────┐
-                  └──────┬────────┘               │
-                         │                        │ Accept Price Change /
-      Market Surge /     │         TTL Expired    │ Re-lease Hold
-      Dynamic Repricing  │                        │
-                         ▼                        ▼
-               ┌───────────────────┐    ┌───────────────────┐
-               │   PRICE_CHANGED   │    │      EXPIRED      │
-               └─────────┬─────────┘    └───────────────────┘
-                         │
-                         │ Place Order (Atomic Lock & Idempotency Key)
-                         ▼
-               ┌───────────────────┐
-               │     COMPLETED     │ (Terminal State)
-               └───────────────────┘
+```mermaid
+stateDiagram-v2
+    [*] --> ACTIVE: create session (5-min hold)
+    ACTIVE --> PRICE_CHANGED: upstream reprice
+    PRICE_CHANGED --> ACTIVE: fan accepts new total
+    ACTIVE --> PROCESSING: Place Order (lock + idempotency key)
+    PROCESSING --> COMPLETED: order finalized
+    PROCESSING --> ACTIVE: stale lock cleared (30s)
+    ACTIVE --> EXPIRED: now >= expiresAt
+    PRICE_CHANGED --> EXPIRED: now >= expiresAt
+    EXPIRED --> ACTIVE: re-lease (reviewer control)
+    COMPLETED --> [*]
 ```
 
-| State           | Checkout Allowed | Description                                                                             |
-| --------------- | ---------------- | --------------------------------------------------------------------------------------- |
-| `ACTIVE`        | **Yes**          | Inventory held under an active 5-minute lease (TTL = 300s).                             |
-| `PRICE_CHANGED` | **Blocked**      | Upstream price drift detected. Checkout locked until user explicitly accepts new total. |
-| `EXPIRED`       | **Blocked**      | Lease window elapsed (TTL <= 0). Ticket hold released back to marketplace.              |
-| `COMPLETED`     | **Terminal**     | Order fulfilled. Inventory permanently confirmed and allocated to user wallet.          |
+| State           | Checkout Allowed | Description                                                                                         |
+| --------------- | ---------------- | --------------------------------------------------------------------------------------------------- |
+| `ACTIVE`        | **Yes**          | Inventory held under a 5-minute lease (`expiresAt = createdAt + 300s`).                             |
+| `PRICE_CHANGED` | **Blocked**      | Upstream price drift detected. Checkout is blocked until the fan explicitly accepts the new total.  |
+| `PROCESSING`    | **Blocked**      | Completion lock held by one surface (30s timeout). Other surfaces receive `409`.                    |
+| `EXPIRED`       | **Blocked**      | Lease window elapsed. The hold is released.                                                         |
+| `COMPLETED`     | **Terminal**     | Order finalized with an order ID. Repeat submissions with the same idempotency key return that order. |
+
+`FAILED` (payment declined) is defined in the domain types but is not implemented in this prototype; see [What I'd Do Differently](#6-what-id-do-differently-with-more-time).
 
 ---
 
@@ -93,9 +89,11 @@ Whether a user starts on Desktop Web, clicks a continuity deep link, or scans th
 
 ### Stale Inventory (Lease Expiry)
 
-- Holds expire strictly based on the server-authoritative `expiresAt` epoch timestamp.
-- If a checkout is attempted on an expired hold, the API rejects the request with HTTP `410 Gone` (`HOLD_EXPIRED`).
-- Both surfaces display an "Inventory Lease Expired" notification and offer a single-click "Re-lease Listing" action that provisions a fresh 5-minute reservation window.
+- Holds expire based on the server-authoritative `expiresAt` epoch timestamp. The client countdown is for display only.
+- `POST /complete` checks `now >= expiresAt` directly before acquiring the lock, independent of the stored status, and rejects with HTTP `400` (`TTL_EXPIRED`).
+- **Restore without re-granting:** if the in-memory store loses a session (e.g. a process restart), the restore fallback derives `createdAt` from the UUIDv7 session ID and recomputes `expiresAt`. An elapsed hold comes back as `EXPIRED`, never as a fresh lease. IDs without a readable timestamp are treated as expired.
+- **Backgrounded tabs:** polling pauses while a tab is hidden. On return (`visibilitychange`, or a back/forward-cache `pageshow` on mobile Safari), and whenever the local countdown reaches 0:00, the client refetches immediately. It also disables **Place Order** until the server confirms the state.
+- Both surfaces display an "Inventory Lease Expired" notification. A reviewer-only "Re-lease Listing" action resets the session with a new 5-minute hold.
 
 ### Upstream Price Drift
 
@@ -109,10 +107,10 @@ Whether a user starts on Desktop Web, clicks a continuity deep link, or scans th
 
 When a user attempts to tap "Place Order" on desktop and mobile simultaneously:
 
-1. **Mutex Lock:** The completion endpoint uses an atomic lock flag on the session record. The first request to acquire the lock begins transaction processing.
-2. **Idempotency Guard:** Every submission passes a surface-scoped `idempotencyKey`. If an identical request arrives, the server returns the cached response rather than charging the card twice.
-3. **Collision Rejection (`409 Conflict`):** If a second device attempts completion while an order is processing or already finalized, the server rejects the request with HTTP `409 Conflict` and error code `ALREADY_COMPLETED`.
-4. **Instant Terminal Convergence:** Surface A renders the confirmed order details and order ID. Surface B receives the updated status on its next poll and locks into the identical terminal state.
+1. **Processing Lock:** The completion endpoint takes a lock on the session record (`PROCESSING`, 30s timeout). In this prototype, completion runs synchronously in a single Node process, so the event loop is what makes it atomic. The lock shows the shape an asynchronous payment flow needs; production would enforce it with a conditional write and a unique order-per-session constraint.
+2. **Idempotency Guard:** Every submission passes a surface-scoped `idempotencyKey`. A repeated request with the same key after completion returns the existing order ID instead of creating a second order.
+3. **Collision Rejection (`409 Conflict`):** A second device attempting completion receives `409`. The code is `CONCURRENT_PROCESSING_CONFLICT` if the first device's lock is still held, or `ALREADY_COMPLETED` if the order is finalized.
+4. **Terminal Convergence:** Surface A renders the confirmed order and order ID immediately via an optimistic cache update. Surface B picks up the new status on its next poll and shows the same terminal state.
 
 ---
 
@@ -123,7 +121,7 @@ When a user attempts to tap "Place Order" on desktop and mobile simultaneously:
 - **HTTP Polling vs. WebSocket/SSE Push:**
   A 2-second polling interval with TanStack Query was chosen for rapid implementation, automatic network failure retries, and clean cache invalidation. While lightweight for a prototype, it incurs periodic HTTP request overhead compared to persistent push connections.
 - **Container Persistence vs. Serverless Lambdas:**
-  Stateless serverless runtimes (such as Vercel) shard memory heaps across ephemeral micro-containers, causing in-memory stores to experience state drift between polls. The prototype is architected to run either locally or on persistent container hosts (such as Render) where a single Node process guarantees linearizable memory.
+  Serverless runtimes (such as Vercel) spread requests across separate containers, so an in-memory store diverges between polls. The prototype runs locally or on a single persistent instance (Render), where one Node process holds all state. That still does not survive restarts or spin-downs; the UUIDv7 restore path makes lost state fail closed (expired) rather than open, but a durable store is the real fix.
 
 ---
 
@@ -131,7 +129,7 @@ When a user attempts to tap "Place Order" on desktop and mobile simultaneously:
 
 ### 1. Centralized Distributed Locking (Redis + Redlock)
 
-Replace the in-memory Map with an enterprise Redis cluster:
+Replace the in-memory Map with Redis (or a transactional database):
 
 - Use native key expiry (`SET session:{id} {data} NX EX 300`) to offload hold expiration timers from application logic.
 - Implement atomic checkout execution via Lua scripts or Redlock distributed mutexes across horizontally scaled API workers.
@@ -140,8 +138,8 @@ Replace the in-memory Map with an enterprise Redis cluster:
 
 Replace 2-second client polling with a persistent Server-Sent Events (SSE) stream backed by Redis Pub/Sub:
 
-- Push upstream price drift or peer checkout completion to all connected surfaces in sub-50ms.
-- Drastically decrease battery consumption on mobile devices and eliminate query amplification on the database during high-traffic ticket drops.
+- Push upstream price drift or peer checkout completion to connected surfaces as it happens, instead of on the next poll.
+- Reduce mobile battery use and the request load that polling creates during high-traffic ticket drops.
 
 ### 3. Cryptographically Signed Session Handoff Tokens
 
@@ -173,7 +171,7 @@ All generated code was rigorously audited, challenged, and verified against syst
 
 1. **Test-Driven Scenario Scaffolding (Playwright):**
    - **Why:** Writing multi-page, multi-context browser orchestration manually is verbose and repetitive. AI is exceptionally well-suited for rapidly scaffolding complex concurrent browser sessions.
-   - **Application:** I directed Claude Code to generate end-to-end integration scenarios simulating dual-device flows (Desktop Page context alongside an isolated Mobile Safari context), handling network interceptions, and validating race conditions across all four core continuity paths.
+   - **Application:** I directed Claude Code to generate end-to-end integration scenarios simulating dual-device flows (Desktop Page context alongside an isolated Mobile Safari context), and validating race conditions across the core continuity paths.
 
 2. **Full-Stack Implementation & State Modeling:**
    - **Why:** To rapidly move from state machine specifications to working TypeScript types, App Router endpoint handlers, and Tailwind UI components.
@@ -194,7 +192,7 @@ Every AI proposal was treated as an unverified draft. I frequently intervened to
 
 - **Fixing Serverless vs. Persistent Host Architecture:**
   - _AI Suggestion:_ The agent initially designed the prototype assuming in-memory `globalThis` session state would function seamlessly across standard serverless lambdas (e.g., Vercel).
-  - _Engineering Intervention:_ I challenged this assumption based on distributed systems realities. Serverless runtimes shard execution heaps across isolated micro-containers, causing polling requests to hit different instances and experience phantom rollbacks or dropped price alerts. I pivoted our hosting strategy to a persistent container environment (Render) and introduced memory-seeding fallbacks to guarantee linearizable state.
+  - _Engineering Intervention:_ I challenged this assumption based on distributed systems realities. Serverless runtimes shard execution heaps across isolated micro-containers, causing polling requests to hit different instances and experience phantom rollbacks or dropped price alerts. I pivoted our hosting strategy to a persistent container environment (Render) and added a restore fallback for sessions missing from memory. That fallback later proved to be a hole: after a restart it granted expired sessions a fresh hold. I fixed it by deriving the lease window from a UUIDv7 session ID and adding a hard epoch check at purchase time.
 
 - **Eliminating Mutation Latency & UI Flicker:**
   - _AI Suggestion:_ The agent’s initial TanStack Query mutations merely called `queryClient.invalidateQueries` in `onSuccess`, relying on a secondary `GET` round-trip to refresh the UI.
@@ -205,4 +203,4 @@ Every AI proposal was treated as an unverified draft. I frequently intervened to
   - _Engineering Intervention:_ I mandated deterministic timestamp anchoring, binding the initial client state directly to the server-provided session expiration and isolating volatile clock text with scoped `suppressHydrationWarning` boundaries.
 
 - **Verification via Zero-Tolerance CI:**
-  - I required every agent-generated change to pass a battery of local and remote checks before landing: strict TypeScript compilation, zero React compiler linter warnings, 100% green runs on our 4-scenario Playwright suite, and a continuous integration pipeline targeting Node 24 on GitHub Actions.
+  - I required every agent-generated change to pass local and CI checks before landing: strict TypeScript compilation, ESLint with the React compiler rules, a green run of the 5-scenario Playwright suite, and the GitHub Actions pipeline on Node 24.
