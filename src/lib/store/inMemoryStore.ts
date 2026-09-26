@@ -20,6 +20,32 @@ const DEFAULT_SESSION_TTL_MS = 5 * 60 * 1000;
 // 30-second processing lock to avoid permanent deadlocks if a client drops mid-payment
 const PROCESSING_LOCK_TIMEOUT_MS = 30 * 1000;
 
+// Tolerated clock skew when trusting an ID-embedded creation epoch
+const MAX_ID_CLOCK_SKEW_MS = 5 * 1000;
+
+/**
+ * Generates an RFC 9562 UUIDv7 whose leading 48 bits carry the creation epoch (ms).
+ * Any process can derive a session's lease window from its ID alone, so a cold or
+ * restarted process can never grant a fresh lease to a stale session.
+ */
+function generateSessionId(now: number): string {
+  const ts = now.toString(16).padStart(12, "0");
+  const rand = randomUUID().replace(/-/g, "");
+  const variant = ((parseInt(rand[16], 16) & 0x3) | 0x8).toString(16);
+  return `${ts.slice(0, 8)}-${ts.slice(8, 12)}-7${rand.slice(13, 16)}-${variant}${rand.slice(17, 20)}-${rand.slice(20, 32)}`;
+}
+
+/**
+ * Extracts the creation epoch from a UUIDv7 session ID, or null if the ID is not
+ * a well-formed v7 identifier (and therefore its lease window cannot be verified).
+ */
+function extractSessionCreatedAt(sessionId: string): number | null {
+  const UUID_V7 =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (!UUID_V7.test(sessionId)) return null;
+  return parseInt(sessionId.slice(0, 8) + sessionId.slice(9, 13), 16);
+}
+
 // Seed sample listing
 const SAMPLE_LISTING: EventListing = {
   id: "list_yankees_redsox_2026",
@@ -41,7 +67,7 @@ class CheckoutSessionStore {
    */
   public createSession(req: CreateSessionRequest): CheckoutSession {
     const now = Date.now();
-    const sessionId = randomUUID();
+    const sessionId = generateSessionId(now);
     const baseTicketPrice = 115.0;
     const serviceFee = 24.5;
     const facilityFee = 5.5;
@@ -93,9 +119,11 @@ class CheckoutSessionStore {
   }
 
   /**
-   * Resilient fallback for serverless container splits (e.g. Vercel Lambdas).
-   * Restores an active session with deterministic Yankee Stadium ticket details
-   * if a page render or API route lands on a cold or split container.
+   * Resilient fallback for serverless container splits and process restarts.
+   * Restores a session with deterministic Yankee Stadium ticket details if a page
+   * render or API route lands on a cold or split container. The lease window is
+   * re-derived from the epoch embedded in the session ID — never re-granted — so an
+   * elapsed hold is restored as EXPIRED. IDs without a verifiable epoch fail closed.
    */
   public restoreOrSeedSession(
     sessionId: string,
@@ -105,6 +133,14 @@ class CheckoutSessionStore {
     if (existing) return this.evaluateSessionState(existing);
 
     const now = Date.now();
+    const embeddedCreatedAt = extractSessionCreatedAt(sessionId);
+    const isVerifiable =
+      embeddedCreatedAt !== null &&
+      embeddedCreatedAt <= now + MAX_ID_CLOCK_SKEW_MS;
+    const createdAt = isVerifiable ? embeddedCreatedAt : now;
+    const expiresAt = isVerifiable
+      ? embeddedCreatedAt + DEFAULT_SESSION_TTL_MS
+      : now;
     const quantity = 2;
     const baseTicketPrice = 115.0;
     const serviceFee = 24.5;
@@ -125,9 +161,9 @@ class CheckoutSessionStore {
       status: "ACTIVE",
       inventoryStatus: "HELD",
       price,
-      createdAt: now,
-      expiresAt: now + DEFAULT_SESSION_TTL_MS,
-      ttlRemainingMs: DEFAULT_SESSION_TTL_MS,
+      createdAt,
+      expiresAt,
+      ttlRemainingMs: Math.max(0, expiresAt - now),
       originSurface: surface,
       lastResumedSurface: surface,
       lastActiveAt: now,
@@ -242,6 +278,16 @@ class CheckoutSessionStore {
 
     const now = Date.now();
 
+    // 3b. Hard epoch guard: never trust status alone when committing a purchase
+    if (now >= session.expiresAt) {
+      this.evaluateSessionState(session);
+      return {
+        success: false,
+        errorCode: "TTL_EXPIRED",
+        errorMessage: "Inventory hold expired. Tickets have been released.",
+      };
+    }
+
     // 4. Concurrency Mutex Lock Check (Device A vs Device B)
     if (session.status === "PROCESSING" && session.activeLock) {
       if (
@@ -350,7 +396,7 @@ class CheckoutSessionStore {
     }
 
     // Check expiration rule
-    if (session.ttlRemainingMs <= 0 && session.status !== "EXPIRED") {
+    if (now >= session.expiresAt && session.status !== "EXPIRED") {
       session.status = "EXPIRED";
       session.inventoryStatus = "RELEASED";
       session.activeLock = undefined;

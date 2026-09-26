@@ -235,4 +235,35 @@ test.describe("Gametime Checkout Continuity & State Recovery Engine", () => {
 
     await context.close();
   });
+
+  test("Scenario 5: Stale Session Restored on a Cold Process Cannot Be Purchased", async ({
+    request,
+  }) => {
+    // Forge a UUIDv7 session ID minted 10 minutes ago that this process has never seen,
+    // simulating a server restart/spin-down while the fan's tab was backgrounded
+    const staleEpoch = Date.now() - 10 * 60 * 1000;
+    const ts = staleEpoch.toString(16).padStart(12, "0");
+    const staleId = `${ts.slice(0, 8)}-${ts.slice(8, 12)}-7abc-8def-0123456789ab`;
+
+    const resumeRes = await request.get(
+      `/api/checkout/${staleId}?surface=mobile_web`,
+    );
+    const resumed = await resumeRes.json();
+    expect(resumed.session.status).toBe("EXPIRED");
+    expect(resumed.canCheckout).toBe(false);
+
+    const completeRes = await request.post(
+      `/api/checkout/${staleId}/complete`,
+      {
+        data: {
+          surface: "mobile_web",
+          idempotencyKey: `idemp_${staleId}_mobile_web`,
+          paymentMethodStub: { type: "CREDIT_CARD", lastFour: "4242" },
+        },
+      },
+    );
+    expect(completeRes.status()).toBe(400);
+    const completed = await completeRes.json();
+    expect(completed.error.code).toBe("TTL_EXPIRED");
+  });
 });

@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AcceptPriceChangeRequest,
@@ -46,6 +47,26 @@ export function useCheckoutSession({
     },
     refetchOnWindowFocus: true,
   });
+
+  // Resume Reconciliation: polling pauses while the tab is hidden, and mobile
+  // browsers may freeze or restore the page from bfcache without a focus event.
+  // Force a server read on return so an elapsed lease surfaces as EXPIRED.
+  const { refetch } = sessionQuery;
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") refetch();
+    };
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) refetch();
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pageshow", handlePageShow);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("pageshow", handlePageShow);
+    };
+  }, [refetch]);
 
   // 2. Mutation: Complete checkout with idempotency guard
   const completeMutation = useMutation<
@@ -198,7 +219,7 @@ export function useCheckoutSession({
     isLoading: sessionQuery.isLoading,
     isError: sessionQuery.isError,
     error: sessionQuery.error,
-    refetch: sessionQuery.refetch,
+    refetch,
     // Actions
     completeCheckout: completeMutation.mutateAsync,
     isCompleting: completeMutation.isPending,

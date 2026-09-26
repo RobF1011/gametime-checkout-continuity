@@ -170,6 +170,7 @@ function SingleCheckoutSurface({
     isAcceptingPrice,
     triggerMockAction,
     isTriggeringMock,
+    refetch,
   } = useCheckoutSession({
     sessionId,
     surface,
@@ -215,6 +216,21 @@ function SingleCheckoutSurface({
     return Math.max(0, session.expiresAt - currentTimestamp);
   }, [session, currentTimestamp]);
 
+  // Local clock says the lease is gone, but the server hasn't confirmed EXPIRED yet
+  // (e.g. polling was suspended while the tab was backgrounded)
+  const isLeaseElapsed =
+    !!session &&
+    timeLeftMs <= 0 &&
+    session.status !== "COMPLETED" &&
+    session.status !== "EXPIRED";
+
+  // Reconcile with the server as soon as the countdown hits 0:00
+  useEffect(() => {
+    if (isLeaseElapsed) {
+      refetch();
+    }
+  }, [isLeaseElapsed, refetch]);
+
   const formattedTimer = useMemo(() => {
     const totalSeconds = Math.floor(timeLeftMs / 1000);
     const minutes = Math.floor(totalSeconds / 60);
@@ -236,6 +252,7 @@ function SingleCheckoutSurface({
   // Prevent flicker back to normal button state while transitioning
   const isSubmitting = isCompleting || hasInitiatedCompletion || isCompleted;
   const isProcessingPrice = isAcceptingPrice || hasInitiatedAcceptPrice;
+  const canPlaceOrder = canCheckout && !isLeaseElapsed;
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(deepLinkUrl);
@@ -246,7 +263,14 @@ function SingleCheckoutSurface({
   const handleCompleteOrder = async () => {
     try {
       setHasInitiatedCompletion(true);
-      await completeCheckout({ idempotencyKey, paymentType: "CREDIT_CARD" });
+      const result = await completeCheckout({
+        idempotencyKey,
+        paymentType: "CREDIT_CARD",
+      });
+      // Server rejected the order (e.g. TTL_EXPIRED); release the submitting state
+      if (!result?.success) {
+        setHasInitiatedCompletion(false);
+      }
     } catch {
       setHasInitiatedCompletion(false);
     }
@@ -457,10 +481,10 @@ function SingleCheckoutSurface({
           {/* Primary Action Button */}
           <div className="pt-2">
             <button
-              disabled={!canCheckout || isSubmitting}
+              disabled={!canPlaceOrder || isSubmitting}
               onClick={handleCompleteOrder}
               className={`w-full py-3.5 px-4 rounded-xl font-bold text-sm tracking-wide transition flex items-center justify-center gap-2 ${
-                canCheckout && !isSubmitting
+                canPlaceOrder && !isSubmitting
                   ? "bg-emerald-500 text-neutral-950 hover:bg-emerald-400 shadow-lg shadow-emerald-500/20 active:scale-[0.99] cursor-pointer"
                   : "bg-neutral-800 text-neutral-400 cursor-not-allowed border border-neutral-700"
               }`}
